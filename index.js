@@ -36,6 +36,20 @@ const ARG_CONFIG = {
       short: '-i',
       long: '--ignore',
       type: 'string'
+    },
+    {
+      name: 'debug',
+      description: 'Mostra logs detalhados da criação de arquivos e pastas',
+      short: '-d',
+      long: '--debug',
+      type: 'boolean'
+    },
+    {
+      name: 'show',
+      description: 'Exibe a árvore antes de recriar a estrutura',
+      short: '-s',
+      long: '--show',
+      type: 'boolean'
     }
   ],
   examples: [
@@ -178,13 +192,14 @@ const Operations = {
     }
   },
 
-  async buildStructureFromTree(treeStr, targetDir, createFiles = false) {
+  async buildStructureFromTree(treeStr, targetDir, createFiles = false, debug = false) {
     try {
       if (!targetDir) throw new Error('Diretório de destino não especificado')
       
       const lines = treeStr.trim().split('\n')
       if (lines.length === 0) return
 
+      if (debug) console.log(`[DEBUG] Criando diretório base: ${targetDir}`)
       await fs.mkdir(targetDir, { recursive: true })
       const pathStack = [path.resolve(targetDir)]
 
@@ -207,10 +222,13 @@ const Operations = {
           const currentPath = path.join(pathStack[pathStack.length - 1], cleanName)
 
           if (isDir) {
+            if (debug) console.log(`[DEBUG] Criando diretório: ${currentPath}`)
             await fs.mkdir(currentPath, { recursive: true })
             pathStack.push(currentPath)
           } else {
-            await fs.mkdir(path.dirname(currentPath), { recursive: true })
+            const parentDir = path.dirname(currentPath)
+            if (debug) console.log(`[DEBUG] Criando arquivo: ${currentPath}`)
+            await fs.mkdir(parentDir, { recursive: true })
             await fs.writeFile(currentPath, '')
           }
         } catch (lineErr) {
@@ -332,7 +350,87 @@ class ArgumentParser {
       let targetDir
       if (isStdin) {
         if (!args.output) throw new Error('Para stdin, -o <diretório> é obrigatório')
-        targetDir = path.resolve(args.output)
+        const targetDir = path.resolve(args.output)
+        
+        await fs.mkdir(targetDir, { recursive: true })
+        
+        const pathStack = [targetDir]
+        let lastDepth = 0
+        let foundFirstValidLine = false
+
+        const rl = require('readline').createInterface({
+          input: process.stdin,
+          crlfDelay: Infinity
+        })
+
+        for await (const line of rl) {
+          try {
+            if (args.show) console.log(line)
+
+            const trimmedLine = line.trim()
+            
+            // Pula linhas vazias
+            if (!trimmedLine) continue
+            
+            // Verifica se é uma linha de hierarquia válida
+            const isHierarchyLine = line.includes('├──') || line.includes('└──') || line.includes('│')
+            
+            // Verifica padrões comuns de primeira linha (./, ../, qualquercoisa/)
+            const isRootPathLine = !isHierarchyLine && 
+                                 (trimmedLine.startsWith('./') || 
+                                  trimmedLine.startsWith('../') || 
+                                  trimmedLine.endsWith('/') || 
+                                  trimmedLine === '.' || 
+                                  trimmedLine === '..')
+            
+            // Se ainda não encontrou a primeira linha válida
+            if (!foundFirstValidLine) {
+              // Se for uma linha de raiz (./, ../, pasta/) ou linha vazia, ignora
+              if (isRootPathLine || !isHierarchyLine) {
+                continue
+              }
+              foundFirstValidLine = true
+            }
+
+            const depth = (line.match(/│   |    /g) || []).length
+            const rawName = line.replace(/^.*?── /, '')
+            const name = rawName.split('#')[0].trim()
+            
+            if (!name) continue
+
+            const isDir = name.endsWith('/')
+            if (!isDir && !args.all) continue
+
+            const cleanName = name.replace(/\/$/, '')
+
+            while (pathStack.length > depth + 1) {
+              pathStack.pop()
+            }
+
+            if (depth < lastDepth) {
+              pathStack.length = depth + 1
+            }
+            lastDepth = depth
+
+            const currentPath = path.join(pathStack[pathStack.length - 1], cleanName)
+
+            if (isDir) {
+              if (args.debug) console.log(`[DEBUG] Criando diretório: ${currentPath}`)
+              await fs.mkdir(currentPath, { recursive: true })
+              pathStack.push(currentPath)
+            } else {
+              const parentDir = path.dirname(currentPath)
+              if (args.debug) console.log(`[DEBUG] Criando arquivo: ${currentPath}`)
+              await fs.mkdir(parentDir, { recursive: true })
+              await fs.writeFile(currentPath, '')
+            }
+          } catch (lineErr) {
+            ErrorHandler.handleWarning(lineErr, `Erro ao processar linha: ${line}`)
+          }
+        }
+
+        console.log(`Estrutura criada em: ${targetDir}`)
+        return
       } else {
         targetDir = args.output ? path.resolve(args.output) : path.dirname(inputPath)
       }
@@ -341,7 +439,12 @@ class ArgumentParser {
         ? await Helpers.readStdin()
         : await fs.readFile(inputPath, 'utf-8')
 
-      await Operations.buildStructureFromTree(treeStr, targetDir, args.all)
+      if (args.show) {
+        console.log('\nEstrutura que será criada:')
+        console.log(treeStr)
+      }
+
+      await Operations.buildStructureFromTree(treeStr, targetDir, args.all, args.debug)
       return
     }
 
@@ -350,8 +453,11 @@ class ArgumentParser {
       const stats = fss.statSync(inputPath)
       if (stats.isDirectory()) {
         const treeStr = path.basename(inputPath) + '/\n' + 
-          await Operations.generateTree(inputPath, '', ignorePatterns)
-        console.log(treeStr)
+        await Operations.generateTree(inputPath, '', ignorePatterns)
+      
+        if (!args.output || args.show) {
+          console.log(treeStr)
+        }
 
         if (args.output) {
           const finalPath = Helpers.resolveOutputPath(args.output)
