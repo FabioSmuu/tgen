@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Node.js Version](https://img.shields.io/badge/node-%3E%3D10.12.0-brightgreen)](https://nodejs.org/) [![Platform](https://img.shields.io/badge/platform-Windows%20|%20Linux%20|%20macOS-lightgrey)](#)
 
+![N|Solid](https://i.imgur.com/zjzjSux.gif)
+
 ---
 
 ## O que é?
